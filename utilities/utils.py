@@ -25,6 +25,9 @@ def init_cmd_args(args):
     optional_args.add_argument("--logger_config", type=str, required=False, help=_LOG_CONFIG_FILE_HELP)
     optional_args.add_argument('-o', '--output_path', required=False, default='./data/output', help=_OUTPUT_PATH_HELP)
 
+    # Sanity check for output directory
+    check_directory('./data/output')
+
     return parser.parse_args(args)
 
 
@@ -50,3 +53,8 @@ def config_logger(log_config_fp):
         logging_config.dictConfig(log_conf)
 
         LOGGER.info("Logging framework initialised!")
+
+
+def check_directory(fp):
+    if not os.path.isdir(fp):
+        os.mkdir("./data/output", mode=0o666)
