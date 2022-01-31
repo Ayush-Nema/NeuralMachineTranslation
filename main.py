@@ -1,56 +1,68 @@
+import os
 import sys
 import time
+import glob
+import logging
 import pandas as pd
-import concurrent.futures as multiprocess
+from pathlib import Path
+from functools import partial
 from transformers import MarianTokenizer, AutoModelForSeq2SeqLM
-from utilities.utility import init_cmd_args
+from utilities.utils import init_cmd_args, config_logger
+from source.translator import translate_text
+
+# $ python3 main.py -d ./data/qrg_smoke_new.csv -t en-es
+
+__author__ = "ayush@gyandata.com"
+
+LOGGER = logging.getLogger(__name__)
+
+_DEFAULT_LEVEL = "INFO"
+_DEFAULT_FORMAT = "[%(asctime)s] - [%(levelname)s] - [%(name)s] : %(message)s"
 
 # Parsing the command line arguments
 cmd_args = init_cmd_args(sys.argv[1:])
 
-# Reading the dataframe
-data = pd.read_csv(cmd_args.data_path)
-
-# Simple data analysis (finding the count of unique subintent values)
-df = data.groupby('subintent')['utterance'].nunique()
-
-# Sub-setting the data based on subintent (for test purposes)
-if cmd_args.subset is not None:
-    data = data[data['subintent'] == cmd_args.subset]
-
-en_utts = data.utterance
-subintents = data.subintent
-
-# Loading the pre-trained model
-if cmd_args.translate == 'en_fr':
-    mname = 'Helsinki-NLP/opus-mt-en-fr'
+# Check whether the logging file is supplied or not
+if cmd_args.logger_config:
+    config_logger(log_config_fp=cmd_args.logger_config)
 else:
-    mname = 'Helsinki-NLP/opus-mt-en-es'
+    logging.basicConfig(level=_DEFAULT_LEVEL, format=_DEFAULT_FORMAT)
 
-tokenizer = MarianTokenizer.from_pretrained(mname)
-model = AutoModelForSeq2SeqLM.from_pretrained(mname)
+# Retrieving the model name
+model_name = f'Helsinki-NLP/opus-mt-{cmd_args.translate}'
+
+# Initialising the pre-trained model
+tokenizer = MarianTokenizer.from_pretrained(model_name)
+model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
+
+# Generate a partial function so as keep only one variable field
+translate_func = partial(translate_text, tokenizer=tokenizer, model=model)
 
 
-def translator(text):
-    input_ids = tokenizer.encode(text, return_tensors="pt")
-    outputs = model.generate(input_ids)
-    decoded = tokenizer.decode(outputs[0], skip_special_tokens=True)
-    return decoded
+def _base_module(file_path):
+    # Reading data and performing translation
+    df = pd.read_csv(file_path)
+    LOGGER.info(f'Initiating translation for {os.path.basename(file_path)} --> length={df.__len__()}')
+    trans_txt = df.utterance.apply(lambda x: translate_func(x))
+    df['translated_text'] = trans_txt
+
+    # Exporting the translated utterances
+    export_fname = f"{Path(file_path).stem}_{cmd_args.translate}.csv"
+    df.to_csv(os.path.join(cmd_args.output_path, export_fname), index=False)
+
+    # Curating the information
+    total_time = time.perf_counter() - start_time
+    LOGGER.info(f"{os.path.basename(file_path)} translated in {total_time:.3f}")
+    LOGGER.info(f"Approximate throughput for {os.path.basename(file_path)} ~ {total_time / df.shape[0]:0.3f} per sec")
 
 
-if __name__ == '__main__':
-    start = time.perf_counter()
+start_time = time.perf_counter()
 
-    with multiprocess.ProcessPoolExecutor(max_workers=7) as executor:
-        trans_text = executor.map(translator, en_utts.to_list())
-
-        op_list = []
-        for non_en_utt in trans_text:
-            op_list.append(non_en_utt)
-
-    trans_text_df = pd.DataFrame(zip(op_list, subintents.to_list()), columns=['utterance', 'subintent'])
-
-    print(f'Finished translation in {time.perf_counter() - start:.4f} secs')
-
-    export_name = cmd_args.translate + '.csv'
-    trans_text_df.to_csv(export_name, index=False)
+if cmd_args.isdir:
+    # If directory path is provided
+    input_path = f'{cmd_args.input_path}/*.csv'
+    for i in glob.glob(input_path):
+        _base_module(file_path=i)
+else:
+    # If file path is provided
+    _base_module(file_path=cmd_args.input_path)

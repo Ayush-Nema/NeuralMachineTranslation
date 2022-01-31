@@ -1,7 +1,7 @@
 import sys
 import time
 import pandas as pd
-from tqdm import trange
+import concurrent.futures as multiprocess
 from transformers import MarianTokenizer, AutoModelForSeq2SeqLM
 from utilities.utils import init_cmd_args
 
@@ -10,13 +10,16 @@ cmd_args = init_cmd_args(sys.argv[1:])
 
 # Reading the dataframe
 data = pd.read_csv(cmd_args.data_path)
-df0 = data.groupby('subintent').nunique()
-all_idx = df0.index.to_list()
 
-# Sub-setting the data based on subintent if `subset` CLI argument is passed
+# Simple data analysis (finding the count of unique subintent values)
+df = data.groupby('subintent')['utterance'].nunique()
+
+# Sub-setting the data based on subintent (for test purposes)
 if cmd_args.subset is not None:
     data = data[data['subintent'] == cmd_args.subset]
 
+en_utts = data.utterance
+subintents = data.subintent
 
 # Loading the pre-trained model
 if cmd_args.translate == 'en_fr':
@@ -24,7 +27,6 @@ if cmd_args.translate == 'en_fr':
 else:
     mname = 'Helsinki-NLP/opus-mt-en-es'
 
-# Initialising the pre-trained model
 tokenizer = MarianTokenizer.from_pretrained(mname)
 model = AutoModelForSeq2SeqLM.from_pretrained(mname)
 
@@ -39,22 +41,16 @@ def translator(text):
 if __name__ == '__main__':
     start = time.perf_counter()
 
-    trans_text, trans_subint = [], []
-    for subint in all_idx:
-        subset_data = data[data['subintent'] == subint]
-        en_utts, subintents = subset_data.utterance, subset_data.subintent
-        print(f'Initialising translation for {subint} subintent')
+    with multiprocess.ProcessPoolExecutor(max_workers=7) as executor:
+        trans_text = executor.map(translator, en_utts.to_list())
 
-        for i in trange(len(en_utts)):
-            ith_utt = translator(en_utts.iloc[i])
-            trans_text.append(ith_utt)
-            trans_subint.append(subintents.iloc[i])
+        op_list = []
+        for non_en_utt in trans_text:
+            op_list.append(non_en_utt)
 
-        print(f'Finished translating {subint} in {time.perf_counter() - start:.4f} secs')
+    trans_text_df = pd.DataFrame(zip(op_list, subintents.to_list()), columns=['utterance', 'subintent'])
 
-    trans_text_df = pd.DataFrame(zip(trans_text, trans_subint), columns=['utterance', 'subintent'])
+    print(f'Finished translation in {time.perf_counter() - start:.4f} secs')
 
-    # Exporting the translated utterances
     export_name = cmd_args.translate + '.csv'
     trans_text_df.to_csv(export_name, index=False)
-    print(f'Total time elapsed: {time.perf_counter() - start:.4f} secs')
