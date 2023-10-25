@@ -10,7 +10,7 @@ from transformers import MarianTokenizer, AutoModelForSeq2SeqLM
 from utilities.utils import init_cmd_args, config_logger
 from source.translator import translate_text
 
-__author__ = "ayush@gyandata.com"
+__author__ = "Ayush Nema"
 
 # $ python3 main.py -d ./data/qrg_smoke_new.csv -t en-ro -o ./data/output/romanian-ro
 # $ python3 main.py --isdir  -d ./data/data_copy/ -t en-sk -o ./data/output/slovak-sk
